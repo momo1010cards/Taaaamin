@@ -1,11 +1,10 @@
 {
   "name": "whatsapp-api",
   "version": "1.0.0",
-  "description": "WhatsApp API using whatsapp-web.js",
+  "description": "Simple WhatsApp API using whatsapp-web.js",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
+    "start": "node index.js"
   },
   "engines": {
     "node": "16.x"
@@ -14,9 +13,6 @@
     "express": "^4.18.2",
     "qrcode": "^1.5.1",
     "whatsapp-web.js": "^1.21.0",
-    "puppeteer": "^19.0.0"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.2"
+    "puppeteer": "^19.7.5"
   }
 }
