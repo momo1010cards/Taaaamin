@@ -1,28 +1,42 @@
-FROM node:18-bullseye
+# استخدم صورة Node الرسمية
+FROM node:18-slim
 
-# تحديد مجلد العمل
+# تثبيت الأدوات المطلوبة (لـ puppeteer)
+RUN apt-get update && apt-get install -y \
+  wget \
+  ca-certificates \
+  fonts-liberation \
+  libappindicator3-1 \
+  libasound2 \
+  libatk-bridge2.0-0 \
+  libatk1.0-0 \
+  libcups2 \
+  libdbus-1-3 \
+  libgdk-pixbuf2.0-0 \
+  libnspr4 \
+  libnss3 \
+  libx11-xcb1 \
+  libxcomposite1 \
+  libxdamage1 \
+  libxrandr2 \
+  xdg-utils \
+  chromium \
+  --no-install-recommends && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# إعداد مجلد العمل
 WORKDIR /app
 
-# تثبيت Chromium والمتطلبات الأخرى
-RUN apt-get update && apt-get install -y \
-    chromium \
-    fonts-ipafont-gothic fonts-wqy-zenhei fonts-thai-tlwg fonts-kacst fonts-freefont-ttf \
-    --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
-
-# تعيين متغيرات البيئة
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD true
-ENV PUPPETEER_EXECUTABLE_PATH /usr/bin/chromium
-
-# نسخ ملفات package.json وتثبيت الحزم
+# نسخ ملفات الحزم فقط أولاً لتقليل إعادة التثبيت
 COPY package*.json ./
+
+# تثبيت الحزم
 RUN npm install --legacy-peer-deps
 
-# نسخ باقي الملفات إلى الحاوية
+# نسخ باقي الملفات
 COPY . .
 
-# تحديد المنفذ
-EXPOSE 8080
+# إعداد المتغير البيئي لمسار كروميوم
+ENV CHROMIUM_PATH=/usr/bin/chromium
 
 # تشغيل التطبيق
-CMD ["npm", "start"]
+CMD ["node", "index.js"]
