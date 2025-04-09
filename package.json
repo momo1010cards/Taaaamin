@@ -4,8 +4,9 @@
   "description": "Simple WhatsApp API using whatsapp-web.js",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
-  },
+    "start": "node index.js",
+    "heroku-postbuild": "mkdir -p ./.cache && mv /app/.cache/puppeteer ./.cache || true"
+},
   "engines": {
     "node": "16.x"
   },
