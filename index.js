@@ -8,10 +8,13 @@ const app = express();
 app.use(express.json());
 
 // إعداد حفظ الجلسة
-const SESSION_FILE_PATH = './session.json';
 let sessionData;
-if (fs.existsSync(SESSION_FILE_PATH)) {
-    sessionData = require(SESSION_FILE_PATH);
+if (process.env.SESSION_DATA) {
+    try {
+        sessionData = JSON.parse(process.env.SESSION_DATA);
+    } catch (e) {
+        console.error('❌ تعذر تحليل بيانات الجلسة من المتغير:', e);
+    }
 }
 
 // إعداد عميل WhatsApp
@@ -30,13 +33,19 @@ let qrCodeImageUrl = null;
 // حفظ بيانات الجلسة عند المصادقة
 client.on('authenticated', (session) => {
     sessionData = session;
-    fs.writeFile(SESSION_FILE_PATH, JSON.stringify(session), (err) => {
-        if (err) {
-            console.error('❌ خطأ في حفظ بيانات الجلسة:', err);
-        } else {
-            console.log('✅ تم حفظ بيانات الجلسة بنجاح');
-        }
-    });
+
+    // عرض بيانات الجلسة في console
+    console.log('✅ انسخ هذا SESSION_DATA واحتفظ به في متغير بيئة:');
+    console.log(JSON.stringify(session));
+
+    // (اختياري) حفظها محلياً إذا أردت الاحتفاظ بها كـ ملف
+    // fs.writeFile(SESSION_FILE_PATH, JSON.stringify(session), (err) => {
+    //     if (err) {
+    //         console.error('❌ خطأ في حفظ بيانات الجلسة:', err);
+    //     } else {
+    //         console.log('✅ تم حفظ بيانات الجلسة بنجاح');
+    //     }
+    // });
 });
 
 // توليد QR Code كصورة
