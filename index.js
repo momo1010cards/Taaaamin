@@ -6,130 +6,66 @@ const fs = require('fs');
 
 const app = express();
 app.use(express.json());
-app.use(express.static('public'));
 
-// تحديد مسار حفظ الجلسة
-const SESSION_FILE_PATH = './whatsapp-session.json';
+// إعداد حفظ الجلسة
+const SESSION_FILE_PATH = './session.json';
 let sessionData;
-
-// التحقق من وجود ملف الجلسة
 if (fs.existsSync(SESSION_FILE_PATH)) {
     sessionData = require(SESSION_FILE_PATH);
 }
 
-// إعداد عميل WhatsApp مع خيار حفظ الجلسة
+// إعداد عميل WhatsApp
 const client = new Client({
     session: sessionData,
     puppeteer: {
         headless: true,
-        executablePath: process.env.CHROMIUM_PATH || undefined,
-        args: [
-            '--no-sandbox', 
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process',
-            '--disable-gpu'
-        ]
+        executablePath: process.env.CHROMIUM_PATH || require('puppeteer').executablePath(),
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
     }
 });
 
 // متغير لتخزين QR Code كصورة
 let qrCodeImageUrl = null;
-let isClientReady = false;
+
+// حفظ بيانات الجلسة عند المصادقة
+client.on('authenticated', (session) => {
+    sessionData = session;
+    fs.writeFile(SESSION_FILE_PATH, JSON.stringify(session), (err) => {
+        if (err) {
+            console.error('❌ خطأ في حفظ بيانات الجلسة:', err);
+        } else {
+            console.log('✅ تم حفظ بيانات الجلسة بنجاح');
+        }
+    });
+});
 
 // توليد QR Code كصورة
 client.on('qr', async (qr) => {
     console.log("✅ QR Code generated. Generating image...");
-    
-    try {
-        // إنشاء QR Code كصورة  
-        qrCodeImageUrl = await qrcode.toDataURL(qr);
-        
-        // حفظ الصورة في ملف لعرضها عبر الموقع
-        const qrImagePath = path.join(__dirname, 'public', 'qrcode.html');
-        if (!fs.existsSync(path.join(__dirname, 'public'))) {
-            fs.mkdirSync(path.join(__dirname, 'public'));
-        }
-        
-        const htmlContent = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>WhatsApp QR Code</title>
-            <meta http-equiv="refresh" content="30">
-            <style>
-                body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
-                img { max-width: 300px; }
-            </style>
-        </head>
-        <body>
-            <h1>WhatsApp QR Code</h1>
-            <p>Scan this QR code with your WhatsApp app</p>
-            <img src="${qrCodeImageUrl}" alt="QR Code">
-            <p>This page will refresh automatically every 30 seconds</p>
-        </body>
-        </html>
-        `;
-        
-        fs.writeFileSync(qrImagePath, htmlContent);
-        console.log("✅ QR Code image saved. Access it at /qrcode.html");
-        
-    } catch (err) {
-        console.error('❌ Error generating QR code:', err);
-    }
-});
 
-// حفظ بيانات الجلسة عند المصادقة
-client.on('authenticated', (session) => {
-    console.log('✅ AUTHENTICATED');
-    sessionData = session;
-    fs.writeFileSync(SESSION_FILE_PATH, JSON.stringify(session), 'utf8');
+    // إنشاء QR Code كصورة  
+    const qrCodeImage = await qrcode.toDataURL(qr);  
+    qrCodeImageUrl = qrCodeImage;  
+
+    console.log("✅ QR Code image generated. Scan to login:");  
+    console.log("QR Code is ready");
 });
 
 // التأكد من أن العميل جاهز
 client.on('ready', () => {
     console.log('✅ WhatsApp Client is ready!');
-    isClientReady = true;
-    // إنشاء صفحة تأكيد الجاهزية
-    const readyPagePath = path.join(__dirname, 'public', 'ready.html');
-    const readyContent = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>WhatsApp Client Status</title>
-        <style>
-            body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
-            .success { color: green; }
-        </style>
-    </head>
-    <body>
-        <h1 class="success">WhatsApp Client is Ready!</h1>
-        <p>Your WhatsApp API is now ready to send messages.</p>
-    </body>
-    </html>
-    `;
-    fs.writeFileSync(readyPagePath, readyContent);
 });
 
-// معالجة حدث قطع الاتصال
+// معالجة انقطاع الاتصال
 client.on('disconnected', (reason) => {
     console.log('❌ WhatsApp client disconnected:', reason);
-    isClientReady = false;
-    
-    // حذف ملف الجلسة إذا تم قطع الاتصال
+    // حذف ملف الجلسة عند الانقطاع لإنشاء جلسة جديدة في المرة القادمة
     if (fs.existsSync(SESSION_FILE_PATH)) {
         fs.unlinkSync(SESSION_FILE_PATH);
+        console.log('✅ تم حذف ملف الجلسة');
     }
-    
-    // إعادة تشغيل العميل بعد فترة
-    setTimeout(() => {
-        client.initialize().catch(err => {
-            console.error('❌ Failed to reinitialize WhatsApp client:', err);
-        });
-    }, 5000);
+    // إعادة تشغيل العميل (اختياري - قد يسبب مشاكل في بيئات الاستضافة)
+    // client.initialize();
 });
 
 // API لإرسال رسالة
@@ -138,60 +74,76 @@ app.post('/send', async (req, res) => {
 
     if (!phone || !message) {  
         return res.status(400).json({ success: false, error: "رقم الهاتف والرسالة مطلوبان!" });  
-    }
-    
-    if (!isClientReady) {
-        return res.status(503).json({ success: false, error: "WhatsApp client is not ready. Please scan the QR code first." });
-    }
+    }  
 
     try {  
-        // تنظيف رقم الهاتف من أي أحرف غير رقمية
-        const cleanPhone = phone.toString().replace(/\D/g, '');
-        console.log(`Attempting to send message to: ${cleanPhone}@c.us`);
+        // تطبيق تنسيق رقم الهاتف
+        const formattedPhone = phone.includes('@c.us') ? phone : `${phone}@c.us`;
         
-        const result = await client.sendMessage(`${cleanPhone}@c.us`, message);
-        console.log('Message sent successfully:', result);
+        // التحقق من حالة الاتصال
+        if (!client.info) {
+            return res.status(503).json({ 
+                success: false, 
+                error: "WhatsApp غير متصل. يرجى مسح رمز QR أولاً." 
+            });
+        }
+
+        await client.sendMessage(formattedPhone, message);  
         res.json({ success: true, message: "✅ تم إرسال الرسالة!" });  
     } catch (error) {  
-        console.error('Error sending message:', error);
+        console.error('❌ خطأ في إرسال الرسالة:', error);
         res.status(500).json({ success: false, error: error.message });  
     }
 });
 
-// صفحة الترحيب الرئيسية
+// صفحة الترحيب والحالة
 app.get('/', (req, res) => {
     res.send(`
-    <!DOCTYPE html>
     <html>
-    <head>
-        <title>WhatsApp API Service</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }
-            .container { max-width: 800px; margin: 0 auto; }
-            h1 { color: #075e54; }
-            .status { padding: 15px; margin-bottom: 20px; border-radius: 5px; }
-            .ready { background-color: #dcf8c6; border: 1px solid #25d366; }
-            .not-ready { background-color: #f8dcdc; border: 1px solid #d32525; }
-            code { background-color: #f5f5f5; padding: 2px 5px; border-radius: 3px; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>WhatsApp API Service</h1>
-            <div class="status ${isClientReady ? 'ready' : 'not-ready'}">
-                Status: ${isClientReady ? '✅ Ready to send messages' : '❌ Not Ready - Scan QR Code to authenticate'}
-            </div>
-            ${!isClientReady ? '<p>Please <a href="/qrcode.html">scan the QR code</a> to authenticate.</p>' : ''}
-            <h2>How to use:</h2>
-            <p>Send POST request to <code>/send</code> with the following JSON body:</p>
-            <pre>
+        <head>
+            <title>WhatsApp API</title>
+            <style>
+                body { 
+                    font-family: Arial, sans-serif; 
+                    margin: 0; 
+                    padding: 20px; 
+                    text-align: center;
+                }
+                .container { 
+                    max-width: 800px; 
+                    margin: 0 auto; 
+                }
+                .status { 
+                    padding: 10px; 
+                    margin: 10px 0; 
+                    border-radius: 5px; 
+                }
+                .connected { 
+                    background-color: #d4edda; 
+                    color: #155724; 
+                }
+                .disconnected { 
+                    background-color: #f8d7da; 
+                    color: #721c24; 
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>واتساب API</h1>
+                <div class="status ${client.info ? 'connected' : 'disconnected'}">
+                    <strong>الحالة:</strong> ${client.info ? '✅ متصل' : '❌ غير متصل'}
+                </div>
+                <p>لمسح رمز QR، قم بزيارة <a href="/qrcode">/qrcode</a></p>
+                <p>لإرسال رسالة، أرسل طلب POST إلى <code>/send</code> بالبيانات:</p>
+                <pre>
 {
-    "phone": "967737070012", // رقم الهاتف مع رمز الدولة بدون علامة +
-    "message": "رسالة الاختبار"
+    "phone": "رقم الهاتف",
+    "message": "نص الرسالة"
 }
-            </pre>
-        </div>
-    </body>
+                </pre>
+            </div>
+        </body>
     </html>
     `);
 });
@@ -199,17 +151,61 @@ app.get('/', (req, res) => {
 // API للحصول على QR Code كصورة
 app.get('/qrcode', (req, res) => {
     if (!qrCodeImageUrl) {
-        return res.status(404).json({ success: false, error: "QR Code not generated yet." });
+        return res.status(404).send(`
+            <html>
+                <head>
+                    <title>QR Code غير متوفر</title>
+                    <meta http-equiv="refresh" content="10">
+                    <style>
+                        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+                    </style>
+                </head>
+                <body>
+                    <h2>رمز QR غير متوفر حالياً</h2>
+                    <p>يتم توليد الرمز، يرجى الانتظار. ستتم إعادة تحميل الصفحة تلقائياً...</p>
+                </body>
+            </html>
+        `);
     }
-    res.send(`<img src="${qrCodeImageUrl}" alt="QR Code" />`);
-});
-
-// إضافة نقطة وصول للحالة
-app.get('/status', (req, res) => {
-    res.json({
-        status: isClientReady ? 'ready' : 'waiting_for_qr_scan',
-        qrAvailable: qrCodeImageUrl !== null
-    });
+    
+    if (client.info) {
+        return res.send(`
+            <html>
+                <head>
+                    <title>WhatsApp متصل</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+                        .success { color: #155724; background-color: #d4edda; padding: 15px; border-radius: 5px; }
+                    </style>
+                </head>
+                <body>
+                    <div class="success">
+                        <h2>✅ تم الاتصال بواتساب بنجاح!</h2>
+                        <p>يمكنك الآن استخدام API لإرسال الرسائل.</p>
+                    </div>
+                </body>
+            </html>
+        `);
+    }
+    
+    res.send(`
+        <html>
+            <head>
+                <title>WhatsApp QR Code</title>
+                <style>
+                    body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+                    .qr-container { margin: 20px auto; max-width: 300px; }
+                </style>
+            </head>
+            <body>
+                <h2>امسح رمز QR باستخدام تطبيق واتساب</h2>
+                <div class="qr-container">
+                    <img src="${qrCodeImageUrl}" alt="QR Code" style="width: 100%; height: auto;" />
+                </div>
+                <p>بعد المسح، سيتم تسجيل دخول الجلسة تلقائياً</p>
+            </body>
+        </html>
+    `);
 });
 
 // تشغيل السيرفر
