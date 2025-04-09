@@ -6,14 +6,14 @@
   "scripts": {
     "start": "node index.js",
     "heroku-postbuild": "mkdir -p ./.cache && mv /app/.cache/puppeteer ./.cache || true"
-},
+  },
   "engines": {
-    "node": "16.x"
+    "node": "18.x"
   },
   "dependencies": {
     "express": "^4.18.2",
     "qrcode": "^1.5.1",
     "whatsapp-web.js": "^1.21.0",
-    "puppeteer": "^19.7.5"
+    "puppeteer": "^19.0.0"
   }
 }
