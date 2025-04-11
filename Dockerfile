@@ -1,42 +1,28 @@
-# استخدم صورة Node الرسمية
-FROM node:18-slim
+# استخدم إصدار Node يحتوي على أدوات التثبيت اللازمة
+FROM node:16-bullseye
 
-# تثبيت الأدوات المطلوبة (لـ puppeteer)
-RUN apt-get update && apt-get install -y \
-  wget \
-  ca-certificates \
-  fonts-liberation \
-  libappindicator3-1 \
-  libasound2 \
-  libatk-bridge2.0-0 \
-  libatk1.0-0 \
-  libcups2 \
-  libdbus-1-3 \
-  libgdk-pixbuf2.0-0 \
-  libnspr4 \
-  libnss3 \
-  libx11-xcb1 \
-  libxcomposite1 \
-  libxdamage1 \
-  libxrandr2 \
-  xdg-utils \
-  chromium \
-  --no-install-recommends && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# إعداد مجلد العمل
+# تحديد مجلد العمل داخل الحاوية
 WORKDIR /app
 
-# نسخ ملفات الحزم فقط أولاً لتقليل إعادة التثبيت
-COPY package*.json ./
+# تثبيت التحديثات وأدوات النظام الأساسية
+RUN apt-get update && apt-get install -y chromium \
+    && rm -rf /var/lib/apt/lists/*  # تنظيف الكاش بعد التثبيت
 
-# تثبيت الحزم
-RUN npm install --legacy-peer-deps
+# نسخ ملفات package.json وتثبيت الحزم
+COPY package.json package-lock.json ./
+RUN npm install --legacy-peer-deps  # قد يساعد إذا كانت هناك مشاكل توافق في npm
 
-# نسخ باقي الملفات
+# نسخ باقي الملفات إلى الحاوية
 COPY . .
 
-# إعداد المتغير البيئي لمسار كروميوم
-ENV CHROMIUM_PATH=/usr/bin/chromium
+# إنشاء مجلد لتخزين بيانات الجلسة
+RUN mkdir -p /app/data
+VOLUME /app/data
 
-# تشغيل التطبيق
-CMD ["node", "index.js"]
+# تعيين متغيرات البيئة
+ENV CHROMIUM_PATH=/usr/bin/chromium-browser
+ENV PORT=8080
+ENV SESSION_FILE_PATH=/app/data/whatsapp-session.json
+
+# الأوامر الافتراضية لتشغيل التطبيق
+CMD ["npm", "start"]
