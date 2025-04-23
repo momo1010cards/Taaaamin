@@ -1,37 +1,21 @@
 const { Client } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const express = require('express');
-const path = require('path');
 const fs = require('fs');
 
 const app = express();
 app.use(express.json());
 
-// تحديد مسار ملف الجلسة - استخدام مسار من متغيرات البيئة أو المجلد الدائم
-const SESSION_FILE_PATH = process.env.SESSION_FILE_PATH || '/app/data/whatsapp-session.json';
-console.log(`📁 مسار ملف الجلسة: ${SESSION_FILE_PATH}`);
-
-// التأكد من وجود المجلد الذي سيحتوي على ملف الجلسة
-const sessionDir = path.dirname(SESSION_FILE_PATH);
-if (!fs.existsSync(sessionDir)) {
-  console.log(`📁 إنشاء مجلد الجلسة: ${sessionDir}`);
-  fs.mkdirSync(sessionDir, { recursive: true });
-}
-
+// متغير لتخزين بيانات الجلسة
 let sessionData;
 
-// التحقق من وجود ملف الجلسة
-if (fs.existsSync(SESSION_FILE_PATH)) {
+// محاولة استرداد الجلسة من متغير البيئة
+if (process.env.WHATSAPP_SESSION) {
   try {
-    const rawData = fs.readFileSync(SESSION_FILE_PATH);
-    if (rawData.length > 0) {
-      sessionData = JSON.parse(rawData);
-      console.log('✅ تم قراءة بيانات الجلسة بنجاح');
-    } else {
-      console.log('⚠️ ملف الجلسة فارغ');
-    }
+    sessionData = JSON.parse(process.env.WHATSAPP_SESSION);
+    console.log('✅ تم استرداد بيانات الجلسة من متغير البيئة');
   } catch (error) {
-    console.error('❌ خطأ في قراءة ملف الجلسة:', error);
+    console.error('❌ خطأ في قراءة بيانات الجلسة من متغير البيئة:', error);
   }
 }
 
@@ -84,19 +68,20 @@ client.on('authenticated', (session) => {
   sessionData = session;
   connectionRetries = 0;
   
-  // حفظ بيانات الجلسة في ملف
-  try {
-    fs.writeFileSync(SESSION_FILE_PATH, JSON.stringify(session));
-    console.log(`✅ تم حفظ بيانات الجلسة بنجاح في ${SESSION_FILE_PATH}`);
-    
-    // التحقق من حفظ الملف
-    if (fs.existsSync(SESSION_FILE_PATH)) {
-      const stats = fs.statSync(SESSION_FILE_PATH);
-      console.log(`📊 حجم ملف الجلسة: ${stats.size} بايت`);
-    }
-  } catch (err) {
-    console.error('❌ خطأ في حفظ بيانات الجلسة:', err);
-  }
+  // حفظ بيانات الجلسة في متغير البيئة (هذا للعرض فقط، لا يمكن تحديث متغيرات البيئة تلقائياً)
+  console.log('⚠️ يجب تحديث متغير البيئة WHATSAPP_SESSION يدوياً باستخدام القيمة التالية:');
+  console.log(JSON.stringify(session));
+  
+  // يمكنك أيضاً إرسال بيانات الجلسة إلى نقطة نهاية API لحفظها في خدمة خارجية
+  // هذا مثال فقط، ستحتاج إلى تنفيذ الخدمة الخارجية بنفسك
+  /*
+  fetch('https://your-external-service.com/save-session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session })
+  }).then(res => console.log('✅ تم حفظ الجلسة في الخدمة الخارجية'))
+    .catch(err => console.error('❌ خطأ في حفظ الجلسة:', err));
+  */
 });
 
 // التأكد من أن العميل جاهز
@@ -125,16 +110,6 @@ client.on('disconnected', (reason) => {
     }, 5000);
   } else {
     console.log('⚠️ تم تجاوز الحد الأقصى لمحاولات إعادة الاتصال');
-    
-    // حذف ملف الجلسة إذا كان موجوداً
-    if (fs.existsSync(SESSION_FILE_PATH)) {
-      try {
-        fs.unlinkSync(SESSION_FILE_PATH);
-        console.log('✅ تم حذف ملف الجلسة');
-      } catch (err) {
-        console.error('❌ خطأ في حذف ملف الجلسة:', err);
-      }
-    }
   }
 });
 
@@ -176,22 +151,17 @@ app.get('/status', (req, res) => {
     success: true,
     connected: isConnected,
     qrAvailable: qrCodeImageUrl !== null,
-    sessionExists: fs.existsSync(SESSION_FILE_PATH),
-    sessionPath: SESSION_FILE_PATH
+    sessionExists: !!sessionData
   });
 });
 
 // API لإعادة تهيئة الاتصال
 app.post('/reset', (req, res) => {
   try {
-    if (fs.existsSync(SESSION_FILE_PATH)) {
-      fs.unlinkSync(SESSION_FILE_PATH);
-      console.log('✅ تم حذف ملف الجلسة');
-    }
-    
     isConnected = false;
     qrCodeImageUrl = null;
     connectionRetries = 0;
+    sessionData = null;
     
     // إعادة تهيئة العميل
     setTimeout(() => {
@@ -205,6 +175,19 @@ app.post('/reset', (req, res) => {
     console.error('❌ خطأ في إعادة تهيئة الاتصال:', error);
     res.status(500).json({ success: false, error: error.message });
   }
+});
+
+// API لعرض بيانات الجلسة الحالية (للنسخ اليدوي)
+app.get('/session', (req, res) => {
+  if (!sessionData) {
+    return res.status(404).json({ success: false, error: "لا توجد جلسة نشطة" });
+  }
+  
+  res.json({
+    success: true,
+    message: "يمكنك نسخ هذه البيانات وتحديث متغير البيئة WHATSAPP_SESSION في Render",
+    session: JSON.stringify(sessionData)
+  });
 });
 
 // صفحة رئيسية محسنة
@@ -291,7 +274,7 @@ app.get('/', (req, res) => {
           text-align: center;
           margin: 20px 0;
         }
-        .debug-info {
+        .session-data {
           background-color: #f8f9fa;
           border: 1px solid #ddd;
           padding: 10px;
@@ -301,6 +284,7 @@ app.get('/', (req, res) => {
           margin-top: 20px;
           max-height: 200px;
           overflow-y: auto;
+          display: none;
         }
         .footer {
           text-align: center;
@@ -326,9 +310,10 @@ app.get('/', (req, res) => {
         
         <div class="actions">
           <button id="resetBtn" class="btn btn-danger" style="display: none;">إعادة تهيئة الاتصال</button>
+          <button id="showSessionBtn" class="btn" style="display: none;">عرض بيانات الجلسة</button>
         </div>
         
-        <div id="debugInfo" class="debug-info" style="display: none;"></div>
+        <div id="sessionData" class="session-data"></div>
         
         <div class="footer">
           <p>Taaaamin WhatsApp API &copy; 2025</p>
@@ -343,25 +328,19 @@ app.get('/', (req, res) => {
               const statusDiv = document.getElementById('status');
               const qrcodeDiv = document.getElementById('qrcode');
               const resetBtn = document.getElementById('resetBtn');
-              const debugInfo = document.getElementById('debugInfo');
-              
-              // عرض معلومات التصحيح
-              debugInfo.style.display = 'block';
-              debugInfo.innerHTML = '<h3>معلومات النظام</h3>' + 
-                                   '<p>الاتصال: ' + (data.connected ? 'متصل' : 'غير متصل') + '</p>' +
-                                   '<p>QR متاح: ' + (data.qrAvailable ? 'نعم' : 'لا') + '</p>' +
-                                   '<p>ملف الجلسة موجود: ' + (data.sessionExists ? 'نعم' : 'لا') + '</p>' +
-                                   '<p>مسار الجلسة: ' + data.sessionPath + '</p>';
+              const showSessionBtn = document.getElementById('showSessionBtn');
               
               if (data.connected) {
                 statusDiv.className = 'status connected';
                 statusDiv.innerHTML = '✅ متصل بـ WhatsApp';
                 qrcodeDiv.innerHTML = '<p>تم الاتصال بنجاح! يمكنك الآن استخدام API لإرسال الرسائل.</p>';
                 resetBtn.style.display = 'inline-block';
+                showSessionBtn.style.display = 'inline-block';
               } else {
                 statusDiv.className = 'status disconnected';
                 statusDiv.innerHTML = '❌ غير متصل بـ WhatsApp';
                 resetBtn.style.display = 'inline-block';
+                showSessionBtn.style.display = 'none';
                 
                 if (data.qrAvailable) {
                   fetch('/qrcode')
@@ -395,6 +374,28 @@ app.get('/', (req, res) => {
                 alert('حدث خطأ أثناء إعادة التهيئة');
               });
           }
+        });
+        
+        // عرض بيانات الجلسة
+        document.getElementById('showSessionBtn').addEventListener('click', function() {
+          fetch('/session')
+            .then(response => response.json())
+            .then(data => {
+              if (data.success) {
+                const sessionDataDiv = document.getElementById('sessionData');
+                sessionDataDiv.style.display = 'block';
+                sessionDataDiv.innerHTML = '<h3>بيانات الجلسة</h3>' +
+                  '<p>انسخ هذه البيانات وأضفها كمتغير بيئة WHATSAPP_SESSION في Render:</p>' +
+                  '<textarea readonly style="width: 100%; height: 100px;">' + data.session + '</textarea>' +
+                  '<p><strong>ملاحظة:</strong> بعد تحديث متغير البيئة، يجب إعادة تشغيل التطبيق لتطبيق التغييرات.</p>';
+              } else {
+                alert(data.error);
+              }
+            })
+            .catch(error => {
+              console.error('Error:', error);
+              alert('حدث خطأ أثناء جلب بيانات الجلسة');
+            });
         });
         
         // التحقق من الحالة كل 5 ثوانٍ
