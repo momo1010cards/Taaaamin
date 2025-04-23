@@ -68,11 +68,20 @@ client.on('authenticated', (session) => {
   sessionData = session;
   connectionRetries = 0;
   
-  // طباعة بيانات الجلسة بتنسيق واضح للنسخ
-  console.log('✅ بيانات الجلسة:');
+  // حفظ بيانات الجلسة في متغير البيئة (هذا للعرض فقط، لا يمكن تحديث متغيرات البيئة تلقائياً)
+  console.log('⚠️ يجب تحديث متغير البيئة WHATSAPP_SESSION يدوياً باستخدام القيمة التالية:');
   console.log(JSON.stringify(session));
   
-  console.log('⚠️ يجب تحديث متغير البيئة WHATSAPP_SESSION يدوياً باستخدام القيمة أعلاه');
+  // يمكنك أيضاً إرسال بيانات الجلسة إلى نقطة نهاية API لحفظها في خدمة خارجية
+  // هذا مثال فقط، ستحتاج إلى تنفيذ الخدمة الخارجية بنفسك
+  /*
+  fetch('https://your-external-service.com/save-session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session })
+  }).then(res => console.log('✅ تم حفظ الجلسة في الخدمة الخارجية'))
+    .catch(err => console.error('❌ خطأ في حفظ الجلسة:', err));
+  */
 });
 
 // التأكد من أن العميل جاهز
@@ -168,17 +177,6 @@ app.post('/reset', (req, res) => {
   }
 });
 
-// API لعرض بيانات الجلسة الحالية بتنسيق نصي للنسخ المباشر
-app.get('/get-session', (req, res) => {
-  if (!sessionData) {
-    return res.status(404).send('لا توجد جلسة نشطة. يرجى مسح رمز QR أولاً.');
-  }
-  
-  // إرجاع بيانات الجلسة كنص عادي للنسخ المباشر
-  res.setHeader('Content-Type', 'text/plain');
-  res.send(JSON.stringify(sessionData));
-});
-
 // API لعرض بيانات الجلسة الحالية (للنسخ اليدوي)
 app.get('/session', (req, res) => {
   if (!sessionData) {
@@ -189,18 +187,6 @@ app.get('/session', (req, res) => {
     success: true,
     message: "يمكنك نسخ هذه البيانات وتحديث متغير البيئة WHATSAPP_SESSION في Render",
     session: JSON.stringify(sessionData)
-  });
-});
-
-// API للتشخيص
-app.get('/debug-session', (req, res) => {
-  res.json({
-    hasSession: sessionData !== null,
-    sessionDataType: typeof sessionData,
-    sessionDataKeys: sessionData ? Object.keys(sessionData) : [],
-    sessionDataSize: sessionData ? JSON.stringify(sessionData).length : 0,
-    isConnected: isConnected,
-    qrAvailable: qrCodeImageUrl !== null
   });
 });
 
@@ -272,7 +258,7 @@ app.get('/', (req, res) => {
           border-radius: 5px;
           cursor: pointer;
           font-size: 16px;
-          margin: 10px 5px;
+          margin: 10px 0;
           display: inline-block;
         }
         .btn:hover {
@@ -325,8 +311,6 @@ app.get('/', (req, res) => {
         <div class="actions">
           <button id="resetBtn" class="btn btn-danger" style="display: none;">إعادة تهيئة الاتصال</button>
           <button id="showSessionBtn" class="btn" style="display: none;">عرض بيانات الجلسة</button>
-          <a href="/get-session" target="_blank" id="directSessionBtn" class="btn" style="display: none;">عرض بيانات الجلسة مباشرة</a>
-          <a href="/debug-session" target="_blank" id="debugBtn" class="btn" style="display: none;">معلومات التشخيص</a>
         </div>
         
         <div id="sessionData" class="session-data"></div>
@@ -345,8 +329,6 @@ app.get('/', (req, res) => {
               const qrcodeDiv = document.getElementById('qrcode');
               const resetBtn = document.getElementById('resetBtn');
               const showSessionBtn = document.getElementById('showSessionBtn');
-              const directSessionBtn = document.getElementById('directSessionBtn');
-              const debugBtn = document.getElementById('debugBtn');
               
               if (data.connected) {
                 statusDiv.className = 'status connected';
@@ -354,15 +336,11 @@ app.get('/', (req, res) => {
                 qrcodeDiv.innerHTML = '<p>تم الاتصال بنجاح! يمكنك الآن استخدام API لإرسال الرسائل.</p>';
                 resetBtn.style.display = 'inline-block';
                 showSessionBtn.style.display = 'inline-block';
-                directSessionBtn.style.display = 'inline-block';
-                debugBtn.style.display = 'inline-block';
               } else {
                 statusDiv.className = 'status disconnected';
                 statusDiv.innerHTML = '❌ غير متصل بـ WhatsApp';
                 resetBtn.style.display = 'inline-block';
-                showSessionBtn.style.display = data.sessionExists ? 'inline-block' : 'none';
-                directSessionBtn.style.display = data.sessionExists ? 'inline-block' : 'none';
-                debugBtn.style.display = 'inline-block';
+                showSessionBtn.style.display = 'none';
                 
                 if (data.qrAvailable) {
                   fetch('/qrcode')
