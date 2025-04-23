@@ -1,4 +1,4 @@
-FROM node:16-bullseye
+FROM node:18-bullseye
 
 WORKDIR /app
 
@@ -25,20 +25,21 @@ RUN ls -la /usr/bin/chromium* || echo "No chromium binaries in /usr/bin"
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV CHROMIUM_PATH=/usr/bin/chromium
 
-# نسخ ملفات package.json وتثبيت الحزم
-COPY package.json package-lock.json ./
-RUN npm install --legacy-peer-deps
-
-# نسخ باقي الملفات إلى الحاوية
-COPY . .
-
-# إنشاء مجلد لتخزين بيانات الجلسة
+# إنشاء مجلد دائم لتخزين بيانات الجلسة
 RUN mkdir -p /app/data
 VOLUME /app/data
 
 # تعيين متغيرات البيئة
 ENV PORT=8080
 ENV SESSION_FILE_PATH=/app/data/whatsapp-session.json
+ENV NODE_ENV=production
+
+# نسخ ملفات package.json وتثبيت الحزم
+COPY package.json package-lock.json ./
+RUN npm install --legacy-peer-deps
+
+# نسخ باقي الملفات إلى الحاوية
+COPY . .
 
 # الأوامر الافتراضية لتشغيل التطبيق
 CMD ["npm", "start"]
