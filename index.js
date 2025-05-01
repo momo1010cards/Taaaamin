@@ -24,16 +24,7 @@ const client = new Client({
     puppeteer: {
         headless: true,
         executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process',
-            '--disable-gpu'
-        ]
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
     }
 });
 
@@ -46,11 +37,9 @@ const MAX_RETRIES = 3;
 // API للحصول على رمز الاقتران (Pairing Code)
 app.post('/pair', async (req, res) => {
     const { phone } = req.body;
-
     if (!phone) {
         return res.status(400).json({ success: false, error: 'رقم الهاتف مطلوب' });
     }
-
     try {
         const cleanPhone = phone.toString().replace(/[^\d]/g, '');
         console.log(`✅ جاري طلب رمز الاقتران للرقم: ${cleanPhone}`);

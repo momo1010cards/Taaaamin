@@ -21,6 +21,9 @@ fonts-freefont-ttf \
 RUN which chromium || which chromium-browser || echo "Chromium not found"
 RUN ls -la /usr/bin/chromium* || echo "No chromium binaries in /usr/bin"
 
+# إنشاء رابط رمزي لضمان التوافق
+RUN ln -sf /usr/bin/chromium /usr/bin/chromium-browser
+
 # تعيين متغيرات البيئة
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV CHROMIUM_PATH=/usr/bin/chromium
