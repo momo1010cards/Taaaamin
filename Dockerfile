@@ -1,8 +1,10 @@
+# استخدام صورة Node.js الإصدار 18 على أساس Debian Bullseye
 FROM node:18-bullseye
 
+# تحديد مجلد العمل
 WORKDIR /app
 
-# تثبيت Chromium وجميع التبعيات اللازمة
+# تثبيت Chromium والتبعيات المطلوبة
 RUN apt-get update && apt-get install -y \
 chromium \
 libatk-bridge2.0-0 \
@@ -19,36 +21,34 @@ fonts-freefont-ttf \
 --no-install-recommends \
 && rm -rf /var/lib/apt/lists/*
 
-# تعيين متغيرات البيئة للمتصفح
+# تعيين متغيرات البيئة
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV CHROMIUM_PATH=/usr/bin/chromium
 ENV DISPLAY=:99
+ENV PORT=8080
+ENV SESSION_FILE_PATH=/app/data/whatsapp-session.json
+ENV NODE_ENV=production
+ENV TZ=Asia/Riyadh
 
-# التحقق من وجود المتصفح وطباعة المسار
+# التحقق من تثبيت Chromium
 RUN echo "Chromium path: $(which chromium || which chromium-browser)" && \
 ls -la /usr/bin/chromium* && \
 chromium --version
 
-# إنشاء مجلد دائم لتخزين بيانات الجلسة
+# إنشاء مجلد للبيانات
 RUN mkdir -p /app/data
 VOLUME /app/data
 
-# تعيين متغيرات البيئة
-ENV PORT=8080
-ENV SESSION_FILE_PATH=/app/data/whatsapp-session.json
-ENV NODE_ENV=production
-ENV TZ=Asia/Riyadh # تعيين المنطقة الزمنية
-
-# نسخ ملفات package.json وتثبيت الحزم
+# نسخ وتركيب التبعيات
 COPY package*.json ./
 RUN npm install --legacy-peer-deps
 
-# نسخ باقي الملفات إلى الحاوية
+# نسخ ملفات التطبيق
 COPY . .
 
-# تخصيص صلاحيات المجلد
+# تعديل الصلاحيات
 RUN chown -R node:node /app
 USER node
 
-# الأوامر الافتراضية لتشغيل التطبيق
+# أمر التشغيل
 CMD ["npm", "start"]
