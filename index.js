@@ -1,31 +1,21 @@
-const { Client } = require('whatsapp-web.js');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const express = require('express');
 const fs = require('fs');
 
 const app = express();
 app.use(express.json());
-
-// متغير لتخزين بيانات الجلسة
-let sessionData;
-
-// محاولة استرداد الجلسة من متغير البيئة
-if (process.env.WHATSAPP_SESSION) {
-  try {
-    sessionData = JSON.parse(process.env.WHATSAPP_SESSION);
-    console.log('✅ تم استرداد بيانات الجلسة من متغير البيئة');
-  } catch (error) {
-    console.error('❌ خطأ في قراءة بيانات الجلسة من متغير البيئة:', error);
-  }
-}
+app.use(express.urlencoded({ extended: true }));
 
 // طباعة معلومات البيئة للتصحيح
 console.log(`🔍 مسار Chromium: ${process.env.CHROMIUM_PATH || 'غير محدد'}`);
 console.log(`🔍 بيئة التشغيل: ${process.env.NODE_ENV || 'development'}`);
 
-// إعداد عميل WhatsApp مع الجلسة المحفوظة إذا كانت متوفرة
+// إعداد عميل WhatsApp مع استخدام LocalAuth للتخزين المحلي للجلسة
 const client = new Client({
-  session: sessionData,
+  authStrategy: new LocalAuth({
+    dataPath: './whatsapp-sessions' // مسار حفظ بيانات الجلسة
+  }),
   puppeteer: {
     headless: true,
     executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
@@ -39,6 +29,10 @@ const client = new Client({
       '--single-process',
       '--disable-gpu'
     ]
+  },
+  webVersionCache: {
+    type: 'remote',
+    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/4.4.1.html', // تحديث النسخة حسب الحاجة
   }
 });
 
@@ -47,6 +41,7 @@ let qrCodeImageUrl = null;
 let isConnected = false;
 let connectionRetries = 0;
 const MAX_RETRIES = 3;
+let sessionInfo = null;
 
 // توليد QR Code كصورة
 client.on('qr', async (qr) => {
@@ -65,29 +60,40 @@ client.on('qr', async (qr) => {
 // حفظ بيانات الجلسة عند المصادقة
 client.on('authenticated', (session) => {
   console.log('✅ تمت المصادقة بنجاح!');
-  sessionData = session;
   connectionRetries = 0;
-  
-  // طباعة بيانات الجلسة بتنسيق واضح للنسخ
-  console.log('✅ بيانات الجلسة:');
-  console.log(JSON.stringify(session));
-  
-  console.log('⚠️ يجب تحديث متغير البيئة WHATSAPP_SESSION يدوياً باستخدام القيمة أعلاه');
+  console.log('✅ تم تخزين بيانات الجلسة محلياً');
 });
 
 // التأكد من أن العميل جاهز
-client.on('ready', () => {
+client.on('ready', async () => {
   console.log('✅ عميل WhatsApp جاهز!');
   isConnected = true;
   connectionRetries = 0;
-  // يمكن مسح صورة QR Code عند الاتصال
   qrCodeImageUrl = null;
+  
+  try {
+    // الحصول على معلومات الجلسة
+    const info = await client.getWid();
+    const phoneNumber = info.user;
+    const clientInfo = await client.info;
+    sessionInfo = {
+      phoneNumber: phoneNumber,
+      name: clientInfo ? clientInfo.pushname : 'غير متوفر',
+      platform: clientInfo ? clientInfo.platform : 'غير متوفر',
+      connected: true
+    };
+    console.log(`✅ متصل برقم: ${phoneNumber}`);
+  } catch (err) {
+    console.error('❌ خطأ في الحصول على معلومات الحساب:', err);
+    sessionInfo = { error: 'فشل في الحصول على معلومات الحساب', connected: true };
+  }
 });
 
 // التعامل مع انقطاع الاتصال
 client.on('disconnected', (reason) => {
   console.log('❌ تم قطع الاتصال بـ WhatsApp:', reason);
   isConnected = false;
+  sessionInfo = null;
   
   // محاولة إعادة الاتصال عدد محدود من المرات
   if (connectionRetries < MAX_RETRIES) {
@@ -142,7 +148,7 @@ app.get('/status', (req, res) => {
     success: true,
     connected: isConnected,
     qrAvailable: qrCodeImageUrl !== null,
-    sessionExists: !!sessionData
+    sessionInfo: sessionInfo
   });
 });
 
@@ -152,7 +158,7 @@ app.post('/reset', (req, res) => {
     isConnected = false;
     qrCodeImageUrl = null;
     connectionRetries = 0;
-    sessionData = null;
+    sessionInfo = null;
     
     // إعادة تهيئة العميل
     setTimeout(() => {
@@ -168,39 +174,80 @@ app.post('/reset', (req, res) => {
   }
 });
 
-// API لعرض بيانات الجلسة الحالية بتنسيق نصي للنسخ المباشر
-app.get('/get-session', (req, res) => {
-  if (!sessionData) {
-    return res.status(404).send('لا توجد جلسة نشطة. يرجى مسح رمز QR أولاً.');
+// API لتسجيل الدخول برقم الهاتف (الطريقة الجديدة)
+app.post('/login-phone', async (req, res) => {
+  const { phone } = req.body;
+  
+  if (!phone) {
+    return res.status(400).json({ success: false, error: "رقم الهاتف مطلوب" });
   }
   
-  // إرجاع بيانات الجلسة كنص عادي للنسخ المباشر
-  res.setHeader('Content-Type', 'text/plain');
-  res.send(JSON.stringify(sessionData));
+  try {
+    // ايقاف أي جلسة حالية
+    if (isConnected) {
+      await client.logout();
+      isConnected = false;
+      sessionInfo = null;
+    }
+    
+    // تنظيف رقم الهاتف
+    const cleanPhone = phone.toString().replace(/[^\d]/g, '');
+    console.log(`🔄 محاولة تسجيل الدخول برقم الهاتف: ${cleanPhone}`);
+    
+    // إعادة تهيئة العميل للسماح بتسجيل الدخول بالطريقة الجديدة
+    qrCodeImageUrl = null;
+    client.initialize().catch(err => {
+      console.error('❌ فشل في تهيئة عميل WhatsApp:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    });
+    
+    res.json({ success: true, message: "تم بدء عملية تسجيل الدخول. انتظر ظهور QR Code في حالة الحاجة لمسحه." });
+  } catch (error) {
+    console.error('❌ خطأ في عملية تسجيل الدخول:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
-// API لعرض بيانات الجلسة الحالية (للنسخ اليدوي)
-app.get('/session', (req, res) => {
-  if (!sessionData) {
-    return res.status(404).json({ success: false, error: "لا توجد جلسة نشطة" });
+// API لحذف الجلسة الحالية
+app.post('/logout', async (req, res) => {
+  try {
+    if (isConnected) {
+      await client.logout();
+      console.log('✅ تم تسجيل الخروج بنجاح');
+    }
+    
+    isConnected = false;
+    qrCodeImageUrl = null;
+    sessionInfo = null;
+    
+    // محاولة حذف ملفات الجلسة من المسار المحدد
+    const sessionPath = './whatsapp-sessions';
+    if (fs.existsSync(sessionPath)) {
+      try {
+        fs.rmdirSync(sessionPath, { recursive: true });
+        console.log('✅ تم حذف ملفات الجلسة بنجاح');
+      } catch (err) {
+        console.error('❌ خطأ في حذف ملفات الجلسة:', err);
+      }
+    }
+    
+    res.json({ success: true, message: "تم تسجيل الخروج وحذف بيانات الجلسة بنجاح." });
+  } catch (error) {
+    console.error('❌ خطأ في عملية تسجيل الخروج:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
-  
-  res.json({
-    success: true,
-    message: "يمكنك نسخ هذه البيانات وتحديث متغير البيئة WHATSAPP_SESSION في Render",
-    session: JSON.stringify(sessionData)
-  });
 });
 
 // API للتشخيص
 app.get('/debug-session', (req, res) => {
   res.json({
-    hasSession: sessionData !== null,
-    sessionDataType: typeof sessionData,
-    sessionDataKeys: sessionData ? Object.keys(sessionData) : [],
-    sessionDataSize: sessionData ? JSON.stringify(sessionData).length : 0,
     isConnected: isConnected,
-    qrAvailable: qrCodeImageUrl !== null
+    qrAvailable: qrCodeImageUrl !== null,
+    sessionInfo: sessionInfo,
+    authStrategy: client.authStrategy ? client.authStrategy.constructor.name : 'غير محدد',
+    retries: connectionRetries,
+    sessionPath: './whatsapp-sessions',
+    sessionExists: fs.existsSync('./whatsapp-sessions')
   });
 });
 
@@ -229,6 +276,7 @@ app.get('/', (req, res) => {
           box-shadow: 0 2px 10px rgba(0,0,0,0.1);
           border-radius: 8px;
           margin-top: 30px;
+          margin-bottom: 30px;
         }
         header {
           text-align: center;
@@ -288,23 +336,78 @@ app.get('/', (req, res) => {
           text-align: center;
           margin: 20px 0;
         }
-        .session-data {
+        .login-form {
+          background-color: #f8f9fa;
+          border-radius: 8px;
+          padding: 20px;
+          margin: 20px 0;
+          display: none;
+        }
+        .form-group {
+          margin-bottom: 15px;
+        }
+        label {
+          display: block;
+          margin-bottom: 5px;
+          font-weight: bold;
+        }
+        input[type="text"] {
+          width: 100%;
+          padding: 10px;
+          border: 1px solid #ddd;
+          border-radius: 5px;
+          font-size: 16px;
+        }
+        .session-info {
           background-color: #f8f9fa;
           border: 1px solid #ddd;
-          padding: 10px;
+          padding: 20px;
           border-radius: 5px;
-          font-family: monospace;
-          font-size: 12px;
           margin-top: 20px;
-          max-height: 200px;
-          overflow-y: auto;
-          display: none;
+        }
+        .session-info h3 {
+          margin-top: 0;
+          color: #128C7E;
+        }
+        .session-info p {
+          margin: 5px 0;
         }
         .footer {
           text-align: center;
           margin-top: 30px;
           color: #6c757d;
           font-size: 14px;
+        }
+        .tab-container {
+          margin: 20px 0;
+        }
+        .tab-buttons {
+          display: flex;
+          border-bottom: 1px solid #ddd;
+        }
+        .tab-button {
+          padding: 10px 20px;
+          cursor: pointer;
+          background-color: #f8f9fa;
+          border: 1px solid #ddd;
+          border-bottom: none;
+          border-radius: 5px 5px 0 0;
+          margin-right: 5px;
+        }
+        .tab-button.active {
+          background-color: #128C7E;
+          color: white;
+          border-color: #128C7E;
+        }
+        .tab-content {
+          display: none;
+          padding: 20px;
+          border: 1px solid #ddd;
+          border-top: none;
+          border-radius: 0 0 5px 5px;
+        }
+        .tab-content.active {
+          display: block;
         }
       </style>
     </head>
@@ -318,18 +421,58 @@ app.get('/', (req, res) => {
         <div class="status-container">
           <h2>حالة الاتصال</h2>
           <div id="status" class="status">جاري التحقق من الحالة...</div>
+          <div id="sessionInfo"></div>
         </div>
         
-        <div id="qrcode"></div>
+        <div class="tab-container">
+          <div class="tab-buttons">
+            <div class="tab-button active" onclick="openTab('qrTab')">تسجيل الدخول بـ QR</div>
+            <div class="tab-button" onclick="openTab('phoneTab')">تسجيل الدخول برقم الهاتف</div>
+            <div class="tab-button" onclick="openTab('testTab')">اختبار الرسائل</div>
+          </div>
+          
+          <div id="qrTab" class="tab-content active">
+            <div id="qrcode">
+              <p>جاري التحقق من حالة الاتصال...</p>
+            </div>
+          </div>
+          
+          <div id="phoneTab" class="tab-content">
+            <h3>تسجيل الدخول برقم الهاتف</h3>
+            <p>أدخل رقم الهاتف بصيغة دولية، مثال: 966555555555</p>
+            
+            <div class="form-group">
+              <label for="phoneNumber">رقم الهاتف:</label>
+              <input type="text" id="phoneNumber" placeholder="أدخل رقم الهاتف بصيغة دولية" />
+            </div>
+            
+            <button id="loginBtn" class="btn">تسجيل الدخول</button>
+            <p id="loginStatus"></p>
+          </div>
+          
+          <div id="testTab" class="tab-content">
+            <h3>اختبار إرسال رسالة</h3>
+            
+            <div class="form-group">
+              <label for="testPhone">رقم الهاتف المستقبل:</label>
+              <input type="text" id="testPhone" placeholder="أدخل رقم الهاتف بصيغة دولية" />
+            </div>
+            
+            <div class="form-group">
+              <label for="testMessage">الرسالة:</label>
+              <textarea id="testMessage" rows="3" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px;"></textarea>
+            </div>
+            
+            <button id="sendTestBtn" class="btn">إرسال رسالة اختبارية</button>
+            <p id="testStatus"></p>
+          </div>
+        </div>
         
         <div class="actions">
-          <button id="resetBtn" class="btn btn-danger" style="display: none;">إعادة تهيئة الاتصال</button>
-          <button id="showSessionBtn" class="btn" style="display: none;">عرض بيانات الجلسة</button>
-          <a href="/get-session" target="_blank" id="directSessionBtn" class="btn" style="display: none;">عرض بيانات الجلسة مباشرة</a>
-          <a href="/debug-session" target="_blank" id="debugBtn" class="btn" style="display: none;">معلومات التشخيص</a>
+          <button id="resetBtn" class="btn">إعادة تهيئة الاتصال</button>
+          <button id="logoutBtn" class="btn btn-danger">تسجيل الخروج</button>
+          <a href="/debug-session" target="_blank" id="debugBtn" class="btn">معلومات التشخيص</a>
         </div>
-        
-        <div id="sessionData" class="session-data"></div>
         
         <div class="footer">
           <p>Taaaamin WhatsApp API &copy; 2025</p>
@@ -337,32 +480,59 @@ app.get('/', (req, res) => {
       </div>
       
       <script>
+        function openTab(tabId) {
+          // إخفاء جميع علامات التبويب
+          const tabContents = document.getElementsByClassName('tab-content');
+          for (let i = 0; i < tabContents.length; i++) {
+            tabContents[i].classList.remove('active');
+          }
+          
+          // إلغاء تنشيط جميع أزرار التبويب
+          const tabButtons = document.getElementsByClassName('tab-button');
+          for (let i = 0; i < tabButtons.length; i++) {
+            tabButtons[i].classList.remove('active');
+          }
+          
+          // تنشيط التبويب المطلوب
+          document.getElementById(tabId).classList.add('active');
+          
+          // العثور على الزر المناسب وتنشيطه
+          const buttons = document.getElementsByClassName('tab-button');
+          for (let i = 0; i < buttons.length; i++) {
+            if (buttons[i].getAttribute('onclick').includes(tabId)) {
+              buttons[i].classList.add('active');
+            }
+          }
+        }
+        
         function checkStatus() {
           fetch('/status')
             .then(response => response.json())
             .then(data => {
               const statusDiv = document.getElementById('status');
               const qrcodeDiv = document.getElementById('qrcode');
-              const resetBtn = document.getElementById('resetBtn');
-              const showSessionBtn = document.getElementById('showSessionBtn');
-              const directSessionBtn = document.getElementById('directSessionBtn');
-              const debugBtn = document.getElementById('debugBtn');
+              const sessionInfoDiv = document.getElementById('sessionInfo');
               
               if (data.connected) {
                 statusDiv.className = 'status connected';
                 statusDiv.innerHTML = '✅ متصل بـ WhatsApp';
                 qrcodeDiv.innerHTML = '<p>تم الاتصال بنجاح! يمكنك الآن استخدام API لإرسال الرسائل.</p>';
-                resetBtn.style.display = 'inline-block';
-                showSessionBtn.style.display = 'inline-block';
-                directSessionBtn.style.display = 'inline-block';
-                debugBtn.style.display = 'inline-block';
+                
+                // عرض معلومات الجلسة
+                if (data.sessionInfo) {
+                  sessionInfoDiv.innerHTML = '<div class="session-info">' +
+                    '<h3>معلومات الجلسة</h3>' +
+                    '<p><strong>رقم الهاتف:</strong> ' + (data.sessionInfo.phoneNumber || 'غير متوفر') + '</p>' +
+                    '<p><strong>الاسم:</strong> ' + (data.sessionInfo.name || 'غير متوفر') + '</p>' +
+                    '<p><strong>المنصة:</strong> ' + (data.sessionInfo.platform || 'غير متوفر') + '</p>' +
+                    '</div>';
+                } else {
+                  sessionInfoDiv.innerHTML = '';
+                }
               } else {
                 statusDiv.className = 'status disconnected';
                 statusDiv.innerHTML = '❌ غير متصل بـ WhatsApp';
-                resetBtn.style.display = 'inline-block';
-                showSessionBtn.style.display = data.sessionExists ? 'inline-block' : 'none';
-                directSessionBtn.style.display = data.sessionExists ? 'inline-block' : 'none';
-                debugBtn.style.display = 'inline-block';
+                sessionInfoDiv.innerHTML = '';
                 
                 if (data.qrAvailable) {
                   fetch('/qrcode')
@@ -398,26 +568,91 @@ app.get('/', (req, res) => {
           }
         });
         
-        // عرض بيانات الجلسة
-        document.getElementById('showSessionBtn').addEventListener('click', function() {
-          fetch('/session')
-            .then(response => response.json())
-            .then(data => {
-              if (data.success) {
-                const sessionDataDiv = document.getElementById('sessionData');
-                sessionDataDiv.style.display = 'block';
-                sessionDataDiv.innerHTML = '<h3>بيانات الجلسة</h3>' +
-                  '<p>انسخ هذه البيانات وأضفها كمتغير بيئة WHATSAPP_SESSION في Render:</p>' +
-                  '<textarea readonly style="width: 100%; height: 100px;">' + data.session + '</textarea>' +
-                  '<p><strong>ملاحظة:</strong> بعد تحديث متغير البيئة، يجب إعادة تشغيل التطبيق لتطبيق التغييرات.</p>';
-              } else {
-                alert(data.error);
-              }
-            })
-            .catch(error => {
-              console.error('Error:', error);
-              alert('حدث خطأ أثناء جلب بيانات الجلسة');
-            });
+        // تسجيل الخروج
+        document.getElementById('logoutBtn').addEventListener('click', function() {
+          if (confirm('هل أنت متأكد من رغبتك في تسجيل الخروج وحذف بيانات الجلسة؟')) {
+            fetch('/logout', { method: 'POST' })
+              .then(response => response.json())
+              .then(data => {
+                alert(data.message);
+                checkStatus();
+              })
+              .catch(error => {
+                console.error('Error:', error);
+                alert('حدث خطأ أثناء تسجيل الخروج');
+              });
+          }
+        });
+        
+        // تسجيل الدخول برقم الهاتف
+        document.getElementById('loginBtn').addEventListener('click', function() {
+          const phoneNumber = document.getElementById('phoneNumber').value.trim();
+          const statusElement = document.getElementById('loginStatus');
+          
+          if (!phoneNumber) {
+            statusElement.innerHTML = '⚠️ يرجى إدخال رقم الهاتف';
+            return;
+          }
+          
+          statusElement.innerHTML = '🔄 جاري تسجيل الدخول...';
+          
+          fetch('/login-phone', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ phone: phoneNumber })
+          })
+          .then(response => response.json())
+          .then(data => {
+            if (data.success) {
+              statusElement.innerHTML = '✅ ' + data.message;
+              // الانتقال إلى تبويب QR لعرض QR Code إذا كان ضرورياً
+              openTab('qrTab');
+            } else {
+              statusElement.innerHTML = '❌ ' + (data.error || 'حدث خطأ غير معروف');
+            }
+            // التحقق من الحالة بعد تسجيل الدخول
+            setTimeout(checkStatus, 2000);
+          })
+          .catch(error => {
+            console.error('Error:', error);
+            statusElement.innerHTML = '❌ حدث خطأ في الاتصال بالخادم';
+          });
+        });
+        
+        // إرسال رسالة اختبارية
+        document.getElementById('sendTestBtn').addEventListener('click', function() {
+          const phone = document.getElementById('testPhone').value.trim();
+          const message = document.getElementById('testMessage').value.trim();
+          const statusElement = document.getElementById('testStatus');
+          
+          if (!phone || !message) {
+            statusElement.innerHTML = '⚠️ يرجى إدخال رقم الهاتف والرسالة';
+            return;
+          }
+          
+          statusElement.innerHTML = '🔄 جاري إرسال الرسالة...';
+          
+          fetch('/send', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ phone, message })
+          })
+          .then(response => response.json())
+          .then(data => {
+            if (data.success) {
+              statusElement.innerHTML = '✅ ' + data.message;
+            } else {
+              statusElement.innerHTML = '❌ ' + (data.error || 'حدث خطأ غير معروف');
+            }
+          })
+          .catch(error => {
+            console.error('Error:', error);
+            statusElement.innerHTML = '❌ حدث خطأ في الاتصال بالخادم';
+          });
         });
         
         // التحقق من الحالة كل 5 ثوانٍ
